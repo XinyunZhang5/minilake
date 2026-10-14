@@ -63,6 +63,23 @@ join task's time over the median task's time.
 
 All three variants return identical results, which the benchmark asserts.
 
+## Commit throughput vs Raft groups
+
+8 writers, one table each, blind appends for 5 s per row, 3-node groups, 5 ms ticks, all in one
+JVM (`ShardingBenchmark`).
+
+| groups | commits | commits/s | vs 1 group |
+|---|---|---|---|
+| 1 | 4388 | 878 | 1.00x |
+| 2 | 6223 | 1245 | 1.42x |
+| 4 | 7524 | 1505 | 1.71x |
+
+More groups add more leaders, so commits to different tables stop queuing behind one Raft log.
+The scaling is sublinear because everything shares one 8-core laptop: 4 groups means 12 node
+threads plus 8 writers. Each MiniLake commit is also several Raft operations: listing the log,
+reading new commits, then the put-if-absent. In a real deployment each group would run on its own
+machines.
+
 ## Reproduce
 
 ```

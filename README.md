@@ -7,6 +7,7 @@ Raft-replicated commit coordinator tested by deterministic simulation.
 ```scala
 df.write.format("minilake").partitionBy("kind").save("/tmp/people")
 df2.write.format("minilake").mode("append").save("/tmp/people")
+kafkaStream.writeStream.format("minilake").option("checkpointLocation", ckpt).start("/tmp/events")
 
 spark.read.format("minilake").load("/tmp/people").filter($"id" < 50)   // skips files by min/max
 spark.read.format("minilake").option("versionAsOf", 0).load("/tmp/people")  // time travel
@@ -59,13 +60,32 @@ The bucket bits are then interleaved into a Morton key, and the data is range-pa
 sorted by that key. Each output file then covers a small box in every Z-order column, and
 min/max skipping works on all of them, not just the first sort column.
 
+**Exactly-once streaming.** MiniLake is also a Structured Streaming sink. Spark delivers each
+micro-batch at least once: after a crash it re-runs the last batch it didn't record as done,
+even if that batch's output was already committed. So each batch commits its files together with
+`txn(appId = query id, version = batchId)` in one atomic log commit, and a batch at or below the
+recorded version is skipped. The test runs Kafka in a container and streams 1000 records in
+batches of 100. It then deletes the checkpoint's last commit marker, which is exactly the state a
+crash between "sink committed" and "Spark recorded it" leaves behind, and restarts with 500 more
+records. Spark replays the batch, the sink skips it, and all 1500 records land once.
+
+**Commits on S3 without a lock service.** Delta Lake needed DynamoDB to coordinate writers on S3
+because S3 had no atomic create-if-absent. Since 2024, `PutObject` with `If-None-Match: *` is
+that primitive, and `S3LogStore` (module `minilake-s3`) builds on it. A losing writer gets 412,
+and a 409 means the race is still being decided, so the write is retried. Tested against
+LocalStack's S3: 8 threads racing for 30 keys produce exactly one winner per key, and the
+read-modify-write counter loses no updates.
+
 **Raft commit coordinator.** `minilake-raft` can take over the put-if-absent decision from the
 file system: `CoordinatedLogStore` keeps the `_log/` files in a Raft-replicated map, so commits
 survive losing a minority of coordinator nodes. The Raft node is a pure state machine with no
 clock and no I/O. That lets a seeded simulator drive it through message loss, duplication,
 reordering, crashes, leader kills and partitions. After every event the simulator checks Raft's
 safety properties, and at the end it checks the clients' history for linearizability. Details,
-results and simplifications: [docs/RAFT.md](docs/RAFT.md).
+results and simplifications: [docs/RAFT.md](docs/RAFT.md). `ShardedLogStore` spreads tables over
+several Raft groups by a hash of the table root. One table's log stays in one group, so its commits
+are still totally ordered, but tables in different groups commit in parallel and fail
+independently. Killing a group's majority stalls only its own tables.
 
 **Spark integration.** Reads return a stock `HadoopFsRelation` over Parquet whose `FileIndex` comes
 from a snapshot, so Spark's vectorized reader, column pruning and partition pruning all still apply.
@@ -98,13 +118,14 @@ From [docs/BENCHMARKS.md](docs/BENCHMARKS.md), 4M rows in 64 files, 1% selective
 | `y < 10k` | 64/64 | 64/64 | 13/65 |
 | `x < 100k or y < 100k` | 64/64 | 64/64 | 23/65 |
 
-Also there: compacting 200 small files into 1 (query 34% faster), and a skewed-join experiment where
+Also there: commit throughput rising 1.71x from 1 to 4 Raft groups (limited by one laptop's 8
+cores), compacting 200 small files into 1 (query 34% faster), and a skewed-join experiment where
 AQE's skew join cuts the straggler from 18.3x the median task to 1.5x, while salting balances tasks
 but runs 2x slower because it replicates the dimension table 32 times.
 
 ## Build
 
-Requires JDK 21 and Maven.
+Requires JDK 21 and Maven. The Kafka and S3 tests need Docker and are skipped without it.
 
 ```
 export JAVA_HOME=/opt/homebrew/opt/openjdk@21
@@ -113,5 +134,4 @@ mvn test
 
 Benchmarks: `./bench.sh` (excluded from `mvn test`).
 
-Roadmap: [docs/PLAN.md](docs/PLAN.md). Next: Kafka streaming writes with exactly-once `txn` ids,
-sharding tables across Raft groups, an S3 LogStore.
+Roadmap: [docs/PLAN.md](docs/PLAN.md).

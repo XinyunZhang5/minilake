@@ -44,7 +44,7 @@ table/
 - [x] **P2 Spark 实验**：倾斜 join → baseline / AQE skew join / salting 对比，用 SparkListener 采每个 task 的耗时和 shuffle 读记录数（代替 Spark UI 截图）
 - [x] **P2 顺手修的 bug**：并发提交时 readdir 可能漏掉刚创建的文件，导致"log gap"误报；改为按版本号直接读
 - [x] **P3 Raft 协调器**：3/5 节点，leader 选举 + 日志复制 + 快照/InstallSnapshot；客户端会话去重；`CoordinatedLogStore`；确定性模拟（丢包/重复/乱序/崩溃/分区）+ 每步安全性检查 + WGL 线性一致性检查；变异测试（Figure 8、去重）；真线程 kill leader 集成测试（见 RAFT.md）
-- [ ] **P4 加分**：Kafka 流式写入（`txn(appId, batchId)` 幂等 exactly-once）；多表按 hash 分片到多个 Raft group；S3/MinIO LogStore
+- [x] **P4**：Structured Streaming sink，每个微批和 `txn(queryId, batchId)` 同一次原子提交，重放的批次跳过（Kafka 容器端到端测试）；多表按 CRC32 分片到多个 Raft group（故障隔离 + 吞吐基准）；S3 LogStore 用条件写入 `If-None-Match: *`（LocalStack 测试；MinIO 社区镜像已下架所以没用）
 
 ## 构建
 
