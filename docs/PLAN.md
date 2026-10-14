@@ -40,8 +40,9 @@ table/
 
 - [x] **P1 核心层 MVP**：actions JSON 编解码、LocalLogStore、Snapshot 重放、time travel（按版本/时间戳）、checkpoint、OptimisticTransaction + 冲突检测、并发 writer 测试
 - [x] **P1 Spark 读写**：`df.write.format("minilake")` append/overwrite + partitionBy；`spark.read.format("minilake")` + `versionAsOf`；端到端测试
-- [ ] **P2 索引**：Parquet footer → min/max/nullCount stats；FileIndex 用 dataFilters 跳文件；`OPTIMIZE` 合并小文件；Z-order；benchmark：跳过文件比例
-- [ ] **P2 Spark 实验**：倾斜 join → salting / AQE 对比，Spark UI 截图
+- [x] **P2 索引**：Parquet footer → min/max/nullCount stats；FileIndex 用 dataFilters 跳文件；`OPTIMIZE` 合并小文件（dataChange=false，只按精确文件记读集，不和并发追加冲突）；Z-order（分位数分桶 + 位交错 + range 分区）；benchmark：跳过文件比例（见 BENCHMARKS.md）
+- [x] **P2 Spark 实验**：倾斜 join → baseline / AQE skew join / salting 对比，用 SparkListener 采每个 task 的耗时和 shuffle 读记录数（代替 Spark UI 截图）
+- [x] **P2 顺手修的 bug**：并发提交时 readdir 可能漏掉刚创建的文件，导致"log gap"误报；改为按版本号直接读
 - [ ] **P3 Raft 协调器**：3 节点，leader 选举 + 日志复制 + 快照；`CoordinatedLogStore`；kill leader 注入测试；历史可串行化检查器
 - [ ] **P4 加分**：Kafka 流式写入（`txn(appId, batchId)` 幂等 exactly-once）；多表按 hash 分片到多个 Raft group；S3/MinIO LogStore
 

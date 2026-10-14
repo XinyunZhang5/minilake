@@ -11,6 +11,8 @@
   <artifactId>minilake-spark_${scala.binary}</artifactId>
 
   <properties>
+    <!-- Benchmarks are slow; run them with ./bench.sh, which clears this. -->
+    <minilake.excludeTags>io.minilake.spark.Benchmark</minilake.excludeTags>
     <!-- Spark 4 on JDK 17+ needs these opens; mirrors Spark's own JavaModuleOptions. -->
     <spark.test.jvm.args>-Xmx2g -XX:+IgnoreUnrecognizedVMOptions --add-opens=java.base/java.lang=ALL-UNNAMED --add-opens=java.base/java.lang.invoke=ALL-UNNAMED --add-opens=java.base/java.lang.reflect=ALL-UNNAMED --add-opens=java.base/java.io=ALL-UNNAMED --add-opens=java.base/java.net=ALL-UNNAMED --add-opens=java.base/java.nio=ALL-UNNAMED --add-opens=java.base/java.util=ALL-UNNAMED --add-opens=java.base/java.util.concurrent=ALL-UNNAMED --add-opens=java.base/java.util.concurrent.atomic=ALL-UNNAMED --add-opens=java.base/jdk.internal.ref=ALL-UNNAMED --add-opens=java.base/sun.nio.ch=ALL-UNNAMED --add-opens=java.base/sun.nio.cs=ALL-UNNAMED --add-opens=java.base/sun.security.action=ALL-UNNAMED --add-opens=java.base/sun.util.calendar=ALL-UNNAMED -Djdk.reflect.useDirectMethodHandle=false -Dio.netty.tryReflectionSetAccessible=true</spark.test.jvm.args>
   </properties>
@@ -80,6 +82,7 @@
           <reportsDirectory>${project.build.directory}/surefire-reports</reportsDirectory>
           <argLine>${spark.test.jvm.args}</argLine>
           <stdout>WF</stdout>
+          <tagsToExclude>${minilake.excludeTags}</tagsToExclude>
         </configuration>
         <executions>
           <execution>

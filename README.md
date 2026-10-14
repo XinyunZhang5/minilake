@@ -9,6 +9,9 @@ df2.write.format("minilake").mode("append").save("/tmp/people")
 
 spark.read.format("minilake").load("/tmp/people").filter($"id" < 50)   // skips files by min/max
 spark.read.format("minilake").option("versionAsOf", 0).load("/tmp/people")  // time travel
+
+Optimize.run(spark, "/tmp/people")                          // compact small files
+Optimize.run(spark, "/tmp/points", zOrderBy = Seq("x", "y"))  // cluster for multi-column skipping
 ```
 
 ## How it works
@@ -45,6 +48,16 @@ into predicates that are evaluated conservatively against those stats. Partition
 exact stats (min = max). `NOT` is pushed down to the leaves, and under `NOT` translation is strict,
 because dropping an untranslatable conjunct would make the file set too narrow.
 
+**OPTIMIZE and Z-order.** OPTIMIZE rewrites files without changing what the table contains, so
+every add and remove in its commit is `dataChange = false`, and it records only its exact input
+files as read, not a predicate. Concurrent appends therefore never conflict with it, while a
+concurrent delete of one of its inputs does, because otherwise the rewrite would resurrect deleted
+rows. Without Z-order it bin-packs small files per partition. With `zOrderBy`, each column is mapped
+to rank buckets via approximate quantiles, so skewed or wide-ranged columns get equal resolution.
+The bucket bits are then interleaved into a Morton key, and the data is range-partitioned and
+sorted by that key. Each output file then covers a small box in every Z-order column, and
+min/max skipping works on all of them, not just the first sort column.
+
 **Spark integration.** Reads return a stock `HadoopFsRelation` over Parquet whose `FileIndex` comes
 from a snapshot, so Spark's vectorized reader, column pruning and partition pruning all still apply.
 Writes use Spark's Parquet writer into a fresh directory, then commit the produced files.
@@ -57,6 +70,24 @@ Writes use Spark's Parquet writer into a fresh directory, then commit the produc
 - Spark: range-partitioned 10-file table, `id < 50` reads 1 file; filter results identical to plain
   Spark for `NOT`/`OR`/`IN`/`BETWEEN` and partially translatable filters; null partitions; dates;
   time travel; orphan files ignored; 6 concurrent Spark appends
+- OPTIMIZE: contents and time travel unchanged, commit is all `dataChange=false`, per-partition
+  bin-packing, Z-order never mixes partitions; core tests interleave a compaction with concurrent
+  appends (both commit) and with a concurrent delete of an input (compaction fails)
+- A directory listing that misses a commit created mid-listing still builds the right snapshot
+
+## Benchmarks
+
+From [docs/BENCHMARKS.md](docs/BENCHMARKS.md), 4M rows in 64 files, 1% selective filters:
+
+| query | random layout | sorted by x | Z-order (x, y) |
+|---|---|---|---|
+| `x < 10k` | 64/64 files | 1/64 | 8/65 |
+| `y < 10k` | 64/64 | 64/64 | 13/65 |
+| `x < 100k or y < 100k` | 64/64 | 64/64 | 23/65 |
+
+Also there: compacting 200 small files into 1 (query 34% faster), and a skewed-join experiment where
+AQE's skew join cuts the straggler from 18.3x the median task to 1.5x, while salting balances tasks
+but runs 2x slower because it replicates the dimension table 32 times.
 
 ## Build
 
@@ -67,5 +98,6 @@ export JAVA_HOME=/opt/homebrew/opt/openjdk@21
 mvn test
 ```
 
-Roadmap: [docs/PLAN.md](docs/PLAN.md). Next: OPTIMIZE/Z-order and skipping benchmarks, a Spark skew
-experiment, then a Raft-replicated commit coordinator.
+Benchmarks: `./bench.sh` (excluded from `mvn test`).
+
+Roadmap: [docs/PLAN.md](docs/PLAN.md). Next: a Raft-replicated commit coordinator.
