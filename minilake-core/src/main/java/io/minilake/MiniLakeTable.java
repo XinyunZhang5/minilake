@@ -84,7 +84,7 @@ public final class MiniLakeTable {
 
   public Snapshot snapshotAt(long version) {
     Listing l = list();
-    if (!l.commits().contains(version) && !l.checkpoints().contains(version)) {
+    if (!l.commits().contains(version) && !l.checkpoints().contains(version) && !commitExists(version)) {
       throw new IllegalArgumentException("version " + version + " does not exist; latest is "
           + (l.commits().isEmpty() ? -1 : l.commits().last()));
     }
@@ -114,11 +114,19 @@ public final class MiniLakeTable {
     throw new IllegalStateException("commit " + version + " has no commitInfo");
   }
 
+  private boolean commitExists(long version) {
+    try {
+      return store.exists(commitPath(version));
+    } catch (IOException e) {
+      throw new UncheckedIOException(e);
+    }
+  }
+
   List<Action> readCommit(long version) {
     try {
       return ActionCodec.decode(store.read(commitPath(version)));
     } catch (NoSuchFileException e) {
-      throw new IllegalStateException("missing commit file for version " + version, e);
+      throw new IllegalStateException("log gap: missing commit file for version " + version, e);
     } catch (IOException e) {
       throw new UncheckedIOException(e);
     }
@@ -136,10 +144,11 @@ public final class MiniLakeTable {
         throw new UncheckedIOException(e);
       }
     }
+    // Don't trust the listing for the versions in between: readdir(3) may omit entries created
+    // while it runs, so a listing can contain N without N-1 even though N-1 was committed first.
+    // A commit exists only after its predecessor did, so any version below a listed one is real,
+    // and only a failed read means the log actually has a hole.
     for (long v = from; v <= version; v++) {
-      if (!l.commits().contains(v)) {
-        throw new IllegalStateException("log gap: commit " + v + " missing while building version " + version);
-      }
       b.apply(readCommit(v));
     }
     return b.build(version);

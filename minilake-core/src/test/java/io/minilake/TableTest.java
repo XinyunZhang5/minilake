@@ -110,4 +110,29 @@ class TableTest {
   static Set<String> paths(Snapshot s) {
     return s.allFiles().stream().map(AddFile::path).collect(Collectors.toCollection(HashSet::new));
   }
+
+  /** A listing taken while writers race may contain version N but not N-1; see MiniLakeTable.build. */
+  @Test
+  void listingThatMissesAnEarlierCommitStillBuilds() throws Exception {
+    MiniLakeTable t = Fixtures.create(dir.toString());
+    for (int i = 0; i < 3; i++) t.startTransaction().commit(List.of(Fixtures.file("a", i, i)), "WRITE");
+    io.minilake.storage.LogStore local = new io.minilake.storage.LocalLogStore();
+    io.minilake.storage.LogStore flaky = new io.minilake.storage.LogStore() {
+      public byte[] read(String p) throws java.io.IOException { return local.read(p); }
+      public void writeIfAbsent(String p, byte[] d) throws java.io.IOException { local.writeIfAbsent(p, d); }
+      public void overwrite(String p, byte[] d) throws java.io.IOException { local.overwrite(p, d); }
+      public boolean exists(String p) throws java.io.IOException { return local.exists(p); }
+      public List<String> list(String d) throws java.io.IOException {
+        return local.list(d).stream().filter(n -> !n.equals(String.format("%020d.json", 2))).toList();
+      }
+    };
+    MiniLakeTable racy = MiniLakeTable.forPath(dir.toString(), flaky);
+    assertEquals(3, racy.latest().version());
+    assertEquals(3, racy.latest().numFiles());
+    assertEquals(2, racy.snapshotAt(2).numFiles());
+
+    Files.delete(dir.resolve("_log").resolve(String.format("%020d.json", 2)));
+    IllegalStateException e = assertThrows(IllegalStateException.class, t::latest);
+    assertTrue(e.getMessage().contains("log gap"), e.getMessage());
+  }
 }
