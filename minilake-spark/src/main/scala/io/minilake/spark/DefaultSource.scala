@@ -5,7 +5,9 @@ import io.minilake.{MiniLakeTable, Snapshot}
 import org.apache.hadoop.fs.{FileSystem, Path}
 import org.apache.spark.sql.execution.datasources.{DataSourceUtils, HadoopFsRelation}
 import org.apache.spark.sql.execution.datasources.parquet.ParquetFileFormat
-import org.apache.spark.sql.sources.{BaseRelation, CreatableRelationProvider, DataSourceRegister, RelationProvider}
+import org.apache.spark.sql.execution.streaming.Sink
+import org.apache.spark.sql.sources.{BaseRelation, CreatableRelationProvider, DataSourceRegister, RelationProvider, StreamSinkProvider}
+import org.apache.spark.sql.streaming.OutputMode
 import org.apache.spark.sql.types.StructType
 import org.apache.spark.sql.{DataFrame, SQLContext, SaveMode, SparkSession}
 
@@ -21,7 +23,8 @@ import scala.jdk.CollectionConverters._
  * snapshot, so Spark's own Parquet reader, vectorization, column pruning and partition pruning
  * all keep working; MiniLake only decides which files exist.
  */
-class DefaultSource extends RelationProvider with CreatableRelationProvider with DataSourceRegister {
+class DefaultSource extends RelationProvider with CreatableRelationProvider with StreamSinkProvider
+    with DataSourceRegister {
 
   override def shortName(): String = "minilake"
 
@@ -30,6 +33,18 @@ class DefaultSource extends RelationProvider with CreatableRelationProvider with
     val snapshot = DefaultSource.selectSnapshot(table, parameters)
     if (!snapshot.exists()) throw new IllegalArgumentException(s"no MiniLake table at ${table.path()}")
     DefaultSource.relation(sqlContext.sparkSession, table, snapshot)
+  }
+
+  override def createSink(
+      sqlContext: SQLContext,
+      parameters: Map[String, String],
+      partitionColumns: Seq[String],
+      outputMode: OutputMode): Sink = {
+    if (outputMode == OutputMode.Update()) {
+      throw new IllegalArgumentException("MiniLake streaming supports append and complete output modes")
+    }
+    new MiniLakeSink(sqlContext.sparkSession, DefaultSource.tablePath(parameters), partitionColumns, outputMode,
+      parameters.get("txnAppId"))
   }
 
   override def createRelation(
@@ -79,7 +94,7 @@ object DefaultSource {
   val VersionAsOf = "versionAsOf"
   val TimestampAsOf = "timestampAsOf"
 
-  private def tablePath(parameters: Map[String, String]): String = {
+  private[spark] def tablePath(parameters: Map[String, String]): String = {
     val raw = parameters.getOrElse("path", throw new IllegalArgumentException("'path' is required"))
     val uri = new URI(raw)
     if (uri.getScheme == null || uri.getScheme == "file") new java.io.File(uri.getPath).getAbsolutePath
@@ -117,7 +132,7 @@ object DefaultSource {
       options = Map.empty)(spark)
   }
 
-  private def checkCompatible(existing: Snapshot, incoming: StructType, partitionBy: Seq[String]): Unit = {
+  private[spark] def checkCompatible(existing: Snapshot, incoming: StructType, partitionBy: Seq[String]): Unit = {
     val current = SchemaConverter.toSpark(existing.schema())
     def shape(s: StructType) = s.fields.map(f => (f.name, f.dataType)).toSeq
     if (shape(current).sortBy(_._1) != shape(incoming).sortBy(_._1)) {
