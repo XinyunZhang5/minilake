@@ -21,22 +21,24 @@ import java.util.List;
  */
 public final class CoordinatedLogStore implements LogStore {
   private static final long ATTEMPT_TIMEOUT_MS = 300;
-  private static final long DEADLINE_MS = 30_000;
+  static final long DEFAULT_DEADLINE_MS = 30_000;
 
   private final LocalCluster cluster;
   private final int clientId;
+  private final long deadlineMs;
   private long seq;
   private long requestId;
   private int target;
 
-  CoordinatedLogStore(LocalCluster cluster, int clientId) {
+  CoordinatedLogStore(LocalCluster cluster, int clientId, long deadlineMs) {
     this.cluster = cluster;
     this.clientId = clientId;
+    this.deadlineMs = deadlineMs;
   }
 
   private synchronized Result execute(Op op) throws IOException {
     Command cmd = new Command(clientId, ++seq, op);
-    long deadline = System.currentTimeMillis() + DEADLINE_MS;
+    long deadline = System.currentTimeMillis() + deadlineMs;
     cluster.leader().ifPresent(l -> target = l);
     while (System.currentTimeMillis() < deadline) {
       long rid = ++requestId;
@@ -63,7 +65,7 @@ public final class CoordinatedLogStore implements LogStore {
         }
       }
     }
-    throw new IOException("commit coordinator unavailable for " + DEADLINE_MS + " ms");
+    throw new IOException("commit coordinator unavailable for " + deadlineMs + " ms");
   }
 
   @Override

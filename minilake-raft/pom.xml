@@ -10,6 +10,23 @@
   </parent>
   <artifactId>minilake-raft</artifactId>
 
+  <properties>
+    <!-- Benchmarks are slow; ./bench.sh runs them. -->
+    <minilake.excludedGroups>benchmark</minilake.excludedGroups>
+  </properties>
+
+  <build>
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-surefire-plugin</artifactId>
+        <configuration>
+          <excludedGroups>${minilake.excludedGroups}</excludedGroups>
+        </configuration>
+      </plugin>
+    </plugins>
+  </build>
+
   <dependencies>
     <dependency>
       <groupId>io.minilake</groupId>

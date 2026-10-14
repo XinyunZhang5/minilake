@@ -76,9 +76,14 @@ public final class LocalCluster implements AutoCloseable {
   }
 
   public CoordinatedLogStore newClient() {
+    return newClient(CoordinatedLogStore.DEFAULT_DEADLINE_MS);
+  }
+
+  /** @param deadlineMs how long one operation keeps retrying before giving up with an IOException */
+  public CoordinatedLogStore newClient(long deadlineMs) {
     int id = nextClient.getAndIncrement();
     mailboxes.put(id, new LinkedBlockingQueue<>());
-    return new CoordinatedLogStore(this, id);
+    return new CoordinatedLogStore(this, id, deadlineMs);
   }
 
   void send(Message m) {
