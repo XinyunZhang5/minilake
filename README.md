@@ -1,7 +1,8 @@
 # MiniLake
 
 A from-scratch, Delta-Lake-style ACID table format: a Java core that turns a directory of Parquet
-files into a transactional table, and a Scala connector so Spark can read and write it.
+files into a transactional table, a Scala connector so Spark can read and write it, and a
+Raft-replicated commit coordinator tested by deterministic simulation.
 
 ```scala
 df.write.format("minilake").partitionBy("kind").save("/tmp/people")
@@ -58,6 +59,14 @@ The bucket bits are then interleaved into a Morton key, and the data is range-pa
 sorted by that key. Each output file then covers a small box in every Z-order column, and
 min/max skipping works on all of them, not just the first sort column.
 
+**Raft commit coordinator.** `minilake-raft` can take over the put-if-absent decision from the
+file system: `CoordinatedLogStore` keeps the `_log/` files in a Raft-replicated map, so commits
+survive losing a minority of coordinator nodes. The Raft node is a pure state machine with no
+clock and no I/O. That lets a seeded simulator drive it through message loss, duplication,
+reordering, crashes, leader kills and partitions. After every event the simulator checks Raft's
+safety properties, and at the end it checks the clients' history for linearizability. Details,
+results and simplifications: [docs/RAFT.md](docs/RAFT.md).
+
 **Spark integration.** Reads return a stock `HadoopFsRelation` over Parquet whose `FileIndex` comes
 from a snapshot, so Spark's vectorized reader, column pruning and partition pruning all still apply.
 Writes use Spark's Parquet writer into a fresh directory, then commit the produced files.
@@ -74,6 +83,10 @@ Writes use Spark's Parquet writer into a fresh directory, then commit the produc
   bin-packing, Z-order never mixes partitions; core tests interleave a compaction with concurrent
   appends (both commit) and with a concurrent delete of an input (compaction fails)
 - A directory listing that misses a commit created mid-listing still builds the right snapshot
+- Raft: 300 simulated seeds (10k+ elections, 6k crashes, 14k snapshot installs) with no safety or
+  linearizability violation; deliberately reintroducing the Raft paper's Figure 8 bug or removing
+  retry deduplication is caught; 4 MiniLake writers over a real-threaded 3-node cluster complete
+  400 read-modify-write increments with no lost updates while the leader is killed every 150 ms
 
 ## Benchmarks
 
@@ -100,4 +113,5 @@ mvn test
 
 Benchmarks: `./bench.sh` (excluded from `mvn test`).
 
-Roadmap: [docs/PLAN.md](docs/PLAN.md). Next: a Raft-replicated commit coordinator.
+Roadmap: [docs/PLAN.md](docs/PLAN.md). Next: Kafka streaming writes with exactly-once `txn` ids,
+sharding tables across Raft groups, an S3 LogStore.

@@ -8,7 +8,7 @@
 |---|---|---|
 | `minilake-core` | Java 21 | 事务日志、快照重放、checkpoint、OCC 冲突检测、data skipping 谓词 |
 | `minilake-spark` | Scala 2.13 / Spark 4.1 | `format("minilake")` 读写；FileIndex 做分区裁剪 + 文件跳过；Parquet footer 采集 min/max |
-| `minilake-raft`（阶段 3） | Java 21 | Raft 复制的提交协调器，替代"存储层 put-if-absent" |
+| `minilake-raft` | Java 21 | Raft 复制的提交协调器，替代"存储层 put-if-absent"；确定性模拟测试 |
 
 ## 表在磁盘上的样子
 
@@ -43,7 +43,7 @@ table/
 - [x] **P2 索引**：Parquet footer → min/max/nullCount stats；FileIndex 用 dataFilters 跳文件；`OPTIMIZE` 合并小文件（dataChange=false，只按精确文件记读集，不和并发追加冲突）；Z-order（分位数分桶 + 位交错 + range 分区）；benchmark：跳过文件比例（见 BENCHMARKS.md）
 - [x] **P2 Spark 实验**：倾斜 join → baseline / AQE skew join / salting 对比，用 SparkListener 采每个 task 的耗时和 shuffle 读记录数（代替 Spark UI 截图）
 - [x] **P2 顺手修的 bug**：并发提交时 readdir 可能漏掉刚创建的文件，导致"log gap"误报；改为按版本号直接读
-- [ ] **P3 Raft 协调器**：3 节点，leader 选举 + 日志复制 + 快照；`CoordinatedLogStore`；kill leader 注入测试；历史可串行化检查器
+- [x] **P3 Raft 协调器**：3/5 节点，leader 选举 + 日志复制 + 快照/InstallSnapshot；客户端会话去重；`CoordinatedLogStore`；确定性模拟（丢包/重复/乱序/崩溃/分区）+ 每步安全性检查 + WGL 线性一致性检查；变异测试（Figure 8、去重）；真线程 kill leader 集成测试（见 RAFT.md）
 - [ ] **P4 加分**：Kafka 流式写入（`txn(appId, batchId)` 幂等 exactly-once）；多表按 hash 分片到多个 Raft group；S3/MinIO LogStore
 
 ## 构建
