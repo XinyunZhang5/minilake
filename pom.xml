@@ -10,6 +10,7 @@
 
   <modules>
     <module>minilake-core</module>
+    <module>minilake-raft</module>
     <module>minilake-spark</module>
   </modules>
 
