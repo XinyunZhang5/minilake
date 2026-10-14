@@ -21,7 +21,11 @@ import scala.jdk.CollectionConverters._
  * Spark hands us partition filters and data filters separately; both go through the same
  * stats check because partition values are just exact stats (min = max).
  */
-class MiniLakeFileIndex(tablePath: Path, val snapshot: Snapshot, override val partitionSchema: StructType)
+class MiniLakeFileIndex(
+    tablePath: Path,
+    val snapshot: Snapshot,
+    override val partitionSchema: StructType,
+    only: Option[Set[String]] = None)
     extends FileIndex {
 
   private val columns = snapshot.schema().fields().asScala.map(_.name).toSet
@@ -31,19 +35,23 @@ class MiniLakeFileIndex(tablePath: Path, val snapshot: Snapshot, override val pa
 
   override def listFiles(partitionFilters: Seq[Expression], dataFilters: Seq[Expression]): Seq[PartitionDirectory] = {
     val predicate = FilterConverter.convert(partitionFilters ++ dataFilters, columns)
-    val selected = snapshot.files(predicate).asScala.toSeq
-    MiniLakeFileIndex.lastScan.set(ScanStats(snapshot.numFiles(), selected.size, predicate.toString))
+    val selected = snapshot.files(predicate).asScala.toSeq.filter(visible)
+    MiniLakeFileIndex.lastScan.set(ScanStats(allFiles.size, selected.size, predicate.toString))
     selected
       .groupBy(_.partitionValues().asScala.toMap)
       .toSeq
       .map { case (values, files) => PartitionDirectory(partitionRow(values), files.map(status)) }
   }
 
-  override def inputFiles: Array[String] = snapshot.allFiles().asScala.map(f => absolute(f).toString).toArray
+  private def visible(f: AddFile): Boolean = only.forall(_.contains(f.path()))
+
+  private def allFiles: Seq[AddFile] = snapshot.allFiles().asScala.toSeq.filter(visible)
+
+  override def inputFiles: Array[String] = allFiles.map(f => absolute(f).toString).toArray
 
   override def refresh(): Unit = ()
 
-  override def sizeInBytes: Long = snapshot.allFiles().asScala.map(_.size()).sum
+  override def sizeInBytes: Long = allFiles.map(_.size()).sum
 
   private def absolute(f: AddFile): Path = new Path(tablePath, f.path())
 

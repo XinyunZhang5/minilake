@@ -98,13 +98,18 @@ object DefaultSource {
   private def parseTimestamp(ts: String): Long =
     ts.toLongOption.getOrElse(java.sql.Timestamp.valueOf(ts).getTime)
 
-  private def relation(spark: SparkSession, table: MiniLakeTable, snapshot: Snapshot): BaseRelation = {
+  /** @param only restrict the relation to these file paths (OPTIMIZE reads just its inputs) */
+  private[spark] def relation(
+      spark: SparkSession,
+      table: MiniLakeTable,
+      snapshot: Snapshot,
+      only: Option[Set[String]] = None): HadoopFsRelation = {
     val full = SchemaConverter.toSpark(snapshot.schema())
     val partitionCols = snapshot.metadata().partitionColumns().asScala.toSeq
     val partitionSchema = StructType(partitionCols.map(c => full(c)))
     val dataSchema = StructType(full.filterNot(f => partitionCols.contains(f.name)))
     HadoopFsRelation(
-      location = new MiniLakeFileIndex(new Path(table.path()), snapshot, partitionSchema),
+      location = new MiniLakeFileIndex(new Path(table.path()), snapshot, partitionSchema, only),
       partitionSchema = partitionSchema,
       dataSchema = dataSchema,
       bucketSpec = None,
@@ -130,12 +135,13 @@ object DefaultSource {
    * every produced file into an AddFile. Nothing is visible until the commit: if the job or the
    * commit fails, the directory is just unreferenced garbage for a future VACUUM.
    */
-  private def writeFiles(
+  private[spark] def writeFiles(
       spark: SparkSession,
       table: MiniLakeTable,
       data: DataFrame,
       partitionColumns: Seq[String],
-      schema: io.minilake.schema.Schema): Seq[AddFile] = {
+      schema: io.minilake.schema.Schema,
+      dataChange: Boolean = true): Seq[AddFile] = {
     val batchDir = s"_data/${UUID.randomUUID()}"
     val out = new Path(table.path(), batchDir)
     data.write
@@ -160,7 +166,7 @@ object DefaultSource {
           partitionValues(rel, partitionColumns).asJava,
           st.getLen,
           st.getModificationTime,
-          true,
+          dataChange,
           ParquetStats.collect(st.getPath, schema, conf))
       }
     }

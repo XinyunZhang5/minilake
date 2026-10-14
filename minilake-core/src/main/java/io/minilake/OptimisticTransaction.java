@@ -65,6 +65,20 @@ public final class OptimisticTransaction {
     return scan(Predicate.TRUE);
   }
 
+  /**
+   * Records a dependency on exactly these files, without a predicate. A rewrite such as OPTIMIZE
+   * uses this instead of {@link #scan}: it must fail if one of its inputs is removed concurrently,
+   * but new files appended meanwhile are none of its business.
+   */
+  public void readFiles(java.util.Collection<AddFile> files) {
+    for (AddFile f : files) {
+      if (!readSnapshot.contains(f.path())) {
+        throw new IllegalArgumentException(f.path() + " is not in the snapshot at version " + readSnapshot.version());
+      }
+      readFiles.add(f.path());
+    }
+  }
+
   /** Last committed version for {@code appId}; recorded so a concurrent duplicate batch conflicts. */
   public Optional<Long> txnVersion(String appId) {
     readAppIds.add(appId);

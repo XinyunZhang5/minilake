@@ -133,4 +133,46 @@ class ConflictTest {
         () -> reader.commit(List.of(), "UPDATE"));
     assertEquals(2, e.winningVersion());
   }
+
+  /** OPTIMIZE: read exact files, remove them and add a rewritten one, all with dataChange=false. */
+  private long compact(OptimisticTransaction txn, AddFile... inputs) {
+    txn.readFiles(List.of(inputs));
+    List<io.minilake.actions.Action> actions = new java.util.ArrayList<>();
+    for (AddFile f : inputs) actions.add(f.remove(0, false));
+    AddFile merged = Fixtures.file(inputs[0].partitionValues().get("part"), 0, 99);
+    actions.add(new AddFile(merged.path(), merged.partitionValues(), merged.size(), 0, false, merged.stats()));
+    return txn.commit(actions, "OPTIMIZE");
+  }
+
+  @Test
+  void compactionDoesNotConflictWithConcurrentAppends() {
+    AddFile a2 = Fixtures.file("a", 0, 99);
+    t.startTransaction().commit(List.of(a2), "WRITE");
+    OptimisticTransaction optimize = t.startTransaction();
+    t.startTransaction().commit(List.of(Fixtures.file("a", 0, 99)), "WRITE");
+    assertEquals(4, compact(optimize, a1, a2));
+    assertEquals(3, t.latest().numFiles(), "b1, the concurrent append, and the merged file");
+  }
+
+  @Test
+  void compactionFailsIfAnInputWasDeleted() {
+    OptimisticTransaction optimize = t.startTransaction();
+    t.startTransaction().commit(List.of(a1.remove(0, true)), "DELETE");
+    assertThrows(ConcurrentDeleteReadException.class, () -> compact(optimize, a1, b1));
+  }
+
+  @Test
+  void appendsDoNotConflictWithAConcurrentCompaction() {
+    OptimisticTransaction reader = t.startTransaction();
+    reader.scan(eq("part", "b"));
+    compact(t.startTransaction(), a1);
+    assertEquals(3, reader.commit(List.of(Fixtures.file("b", 0, 1)), "WRITE"),
+        "the compaction added no new data, so it cannot invalidate what the reader saw");
+  }
+
+  @Test
+  void readFilesRejectsFilesOutsideTheSnapshot() {
+    assertThrows(IllegalArgumentException.class,
+        () -> t.startTransaction().readFiles(List.of(Fixtures.file("a", 0, 1))));
+  }
 }
